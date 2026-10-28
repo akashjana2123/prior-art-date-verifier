@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prior-Art Date Verifier tests</title>
+<style>
+  body { font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 24px; color: #17202b; background: #f3f5f7; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  #summary { font-weight: 700; margin: 12px 0 16px; }
+  .group { margin-top: 18px; font-weight: 700; }
+  .t { padding: 3px 0 3px 10px; border-left: 3px solid #1e7a3c; margin: 2px 0; background: #fff; }
+  .t.fail { border-left-color: #b42318; background: #fbe9e7; }
+  .t small { color: #4b5666; display: block; }
+  @media (prefers-color-scheme: dark) { body { background: #12171d; color: #e8ecf1; } .t { background: #1a2129; } .t.fail { background: #3a1a17; } .t small { color: #b3bcc8; } }
+</style>
+</head>
+<body>
+<h1>Prior-Art Date Verifier: unit tests</h1>
+<p>Plain assertions against the core functions inside <code>index.html</code>. No framework, no network.</p>
+<div id="summary">Running…</div>
+<div id="out"></div>
+<script>
+(async function () {
+  const out = document.getElementById('out');
+  const summary = document.getElementById('summary');
+  let pass = 0, fail = 0;
+  const group = (name) => { const d = document.createElement('div'); d.className = 'group'; d.textContent = name; out.appendChild(d); };
+  function report(name, ok, detail) {
+    const d = document.createElement('div');
+    d.className = 't' + (ok ? '' : ' fail');
+    d.textContent = (ok ? 'PASS  ' : 'FAIL  ') + name;
+    if (!ok && detail) { const s = document.createElement('small'); s.textContent = detail; d.appendChild(s); }
+    out.appendChild(d);
+    ok ? pass++ : fail++;
+  }
+  const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function test(name, fn) {
+    try { const r = fn(); report(name, r === true || r === undefined, r === false ? 'Assertion returned false.' : ''); }
+    catch (e) { report(name, false, e && e.stack ? e.stack.split('\n')[0] : String(e)); }
+  }
+  async function atest(name, fn) {
+    try { const r = await fn(); report(name, r === true || r === undefined, r === false ? 'Assertion returned false.' : ''); }
+    catch (e) { report(name, false, e && e.stack ? e.stack.split('\n')[0] : String(e)); }
+  }
+  const assert = (cond, msg) => { if (!cond) throw new Error(msg || 'assertion failed'); };
+
+  /* Load the core script from index.html, so the tests always check the shipped code. */
+  try {
+    const html = await (await fetch('index.html', { cache: 'no-store' })).text();
+    const code = new DOMParser().parseFromString(html, 'text/html').getElementById('padv-core').textContent;
+    const s = document.createElement('script');
+    s.textContent = code;
+    document.head.appendChild(s);
+  } catch (e) {
+    summary.textContent = 'Could not load index.html. Serve this folder over http (for example: python -m http.server) and open tests.html again.';
+    return;
+  }
+  const P = window.PADV;
+  if (!P) { summary.textContent = 'The core did not load.'; return; }
+  const S = { ...P.DEFAULT_SETTINGS };
+
+  group('Wayback timestamps');
+  test('parses a 14-digit timestamp as UTC', () => P.parseWaybackTimestamp('20180916124507').toISOString() === '2018-09-16T12:45:07.000Z');
+  test('pads a short timestamp (year and month)', () => P.parseWaybackTimestamp('201809').toISOString() === '2018-09-01T00:00:00.000Z');
+  test('rejects letters and impossible months', () => P.parseWaybackTimestamp('2018ab') === null && P.parseWaybackTimestamp('20181399000000') === null);
+
+  group('Cut-off comparison');
+  test('a capture the day before counts as before', () => P.isBeforeCutoff('2018-12-31T23:59:59Z', '2019-01-01', false));
+  test('a capture on the cut-off day is not before when the toggle is off', () => !P.isBeforeCutoff('2019-01-01T08:00:00Z', '2019-01-01', false));
+  test('a capture on the cut-off day counts when the toggle is on', () => P.isBeforeCutoff('2019-01-01T23:59:59Z', '2019-01-01', true));
+  test('the day after never counts', () => !P.isBeforeCutoff('2019-01-02T00:00:00Z', '2019-01-01', true));
+  test('an invalid cut-off date gives false', () => !P.isBeforeCutoff('2018-01-01T00:00:00Z', '2019-02-30', false));
+  test('near-cut-off detection', () => P.isNearCutoff('2018-12-31T20:00:00Z', '2019-01-01') && !P.isNearCutoff('2018-12-20T00:00:00Z', '2019-01-01'));
+
+  group('URLs');
+  test('adds https:// and accepts a bare domain path', () => P.normaliseInputUrl('sqlite.org/news.html').url === 'https://sqlite.org/news.html');
+  test('rejects javascript: and missing domains', () => !P.normaliseInputUrl('javascript:alert(1)').ok && !P.normaliseInputUrl('localhost').ok && !P.normaliseInputUrl('').ok);
+  test('URL variants: scheme, www and trailing slash', () => eq(P.urlVariants('https://sqlite.org/news.html'),
+    ['https://sqlite.org/news.html', 'http://sqlite.org/news.html', 'https://www.sqlite.org/news.html', 'https://sqlite.org/news.html/']));
+  test('URL variants remove www when present', () => P.urlVariants('https://www.example.com/a/')[2] === 'https://example.com/a/');
+  test('same document ignores www, scheme and trailing slash', () => P.sameDocument('http://www.sqlite.org/news.html/', 'https://sqlite.org/news.html'));
+
+  group('Reference type detection');
+  test('YouTube watch URL', () => P.youtubeId('https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10') === 'dQw4w9WgXcQ');
+  test('youtu.be and shorts URLs', () => P.youtubeId('https://youtu.be/dQw4w9WgXcQ') === 'dQw4w9WgXcQ' && P.youtubeId('https://youtube.com/shorts/dQw4w9WgXcQ') === 'dQw4w9WgXcQ');
+  test('a YouTube channel page is not a video', () => P.youtubeId('https://www.youtube.com/@somechannel') === null);
+  test('GitHub repository URL, with .git and sub-paths', () => eq(P.githubRepo('https://github.com/chalk/chalk.git'), { owner: 'chalk', repo: 'chalk' }) && eq(P.githubRepo('https://github.com/chalk/chalk/releases'), { owner: 'chalk', repo: 'chalk' }));
+  test('GitHub reserved paths are not repositories', () => P.githubRepo('https://github.com/orgs/chalk') === null && P.githubRepo('https://github.com/chalk') === null);
+  test('detectType', () => P.detectType('https://youtu.be/dQw4w9WgXcQ') === 'youtube' && P.detectType('https://github.com/a/b') === 'github' && P.detectType('https://example.com') === 'web');
+
+  group('Text extraction and lexical scoring');
+  test('scripts, styles and navigation are removed; paragraphs become sentences', () => {
+    const r = P.extractTextFromHtml('<title>T</title><script>alert(1)<\/script><nav>Home About</nav><p>First sentence here. Second one follows.</p><p>Third\nline</p>');
+    return r.title === 'T' && eq(r.sentences, ['First sentence here.', 'Second one follows.', 'Third line']);
+  });
+  test('an exact phrase scores 1', () => P.lexicalScore('support for window functions', 'Support for window functions was added.').score === 1);
+  test('partial overlap scores between 0 and 1', () => { const s = P.lexicalScore('support for window functions', 'Window functions are now supported.').score; return s > 0.5 && s < 1; });
+  test('unrelated text scores 0', () => P.lexicalScore('support for window functions', 'The car is red.').score === 0);
+  test('stemming joins plural and singular', () => P.stem('functions') === P.stem('function'));
+  test('verdict thresholds', () => P.verdictFromScore(0.7, 0.7, 0.45) === 'present' && P.verdictFromScore(0.5, 0.7, 0.45) === 'possible' && P.verdictFromScore(0.2, 0.7, 0.45) === 'absent');
+  test('capture selection keeps the first and last', () => eq(P.selectCaptureIndices(93, 5), [0, 23, 46, 69, 92]) && eq(P.selectCaptureIndices(3, 5), [0, 1, 2]));
+
+  group('Grading rules');
+  const src = (o) => ({ kind: 'x', label: 'x', url: 'https://e.x', date: '2018-01-01T00:00:00Z', before: true, features: [{ verdict: 'present' }], ...o });
+  test('A: two independent parties and the feature in one of them', () =>
+    P.gradeCase([src({ cls: 'independent', party: 'Internet Archive' }), src({ cls: 'independent', party: 'Hacker News', features: [{ verdict: 'absent' }] })], ['f']).grade === 'A');
+  test('ten captures from one archive are one party, not A', () =>
+    P.gradeCase(Array.from({ length: 10 }, () => src({ cls: 'independent', party: 'Internet Archive' })), ['f']).grade === 'B');
+  test('B: one platform-recorded date showing the feature', () => P.gradeCase([src({ cls: 'platform', party: 'GitHub' })], ['f']).grade === 'B');
+  test('C: only self-reported dates', () => P.gradeCase([src({ cls: 'self', party: 'Git (self-reported)' })], ['f']).grade === 'C');
+  test('D: nothing before the cut-off', () => P.gradeCase([src({ cls: 'independent', party: 'Internet Archive', before: false })], ['f']).grade === 'D');
+  test('D: feature absent in every checked source', () => P.gradeCase([src({ cls: 'independent', party: 'Internet Archive', features: [{ verdict: 'absent' }] })], ['f']).grade === 'D');
+  test('AI items never count, even if they claim the feature', () =>
+    P.gradeCase([src({ cls: 'ai', party: 'Gemini' }), src({ cls: 'ai', party: 'Gemini 2' })], ['f']).grade === 'D');
+  test('AI items do not lift a B to an A', () =>
+    P.gradeCase([src({ cls: 'platform', party: 'GitHub' }), src({ cls: 'ai', party: 'Gemini' })], ['f']).grade === 'B');
+  test('analyst override is respected', () => P.gradeCase([src({ cls: 'platform', party: 'GitHub', override: { 0: 'absent' } })], ['f']).grade === 'D');
+  test('several features: the weakest grade applies', () =>
+    P.gradeCase([src({ cls: 'platform', party: 'GitHub', features: [{ verdict: 'present' }, { verdict: 'absent' }] })], ['f1', 'f2']).grade === 'D');
+  test('key date is the earliest source for the rule', () =>
+    P.gradeCase([src({ cls: 'platform', party: 'GitHub', date: '2018-05-01T00:00:00Z' }), src({ cls: 'platform', party: 'GitHub', date: '2018-03-01T00:00:00Z' })], ['f']).keyDate === '2018-03-01T00:00:00Z');
+
+  group('AI output checks');
+  const sentences = ['Two big enhancements in this release: Support for window functions was added, using the PostgreSQL documentation as the baseline.', 'Another sentence.'];
+  test('a verbatim quotation is accepted', () => P.verifyQuote('Support for window functions was added', sentences, 0).ok);
+  test('typographic quotes and spacing are normalised', () => P.verifyQuote('Support  for window\nfunctions was added, using the PostgreSQL', sentences, null).ok);
+  test('a wrong sentence number is corrected, not trusted', () => { const r = P.verifyQuote('Another sentence', sentences, 0); return r.ok && r.sentenceId === 1 && r.corrected; });
+  test('a paraphrase is rejected', () => !P.verifyQuote('SQLite now fully supports SQL window functions', sentences, 0).ok);
+  test('a very short quotation is rejected', () => !P.verifyQuote('window', sentences, 0).ok);
+  test('summary check rejects a URL that is not in the table', () => P.checkSummaryDraft('See https://evil.example/x for more.', ['https://sqlite.org/news.html'], []).length === 1);
+  test('summary check rejects a date that is not in the table', () => P.checkSummaryDraft('It was public on 3 March 2017.', [], ['2018-08-15']).length === 1);
+  test('summary check accepts known URLs and dates', () => P.checkSummaryDraft('Captured on 2018-08-15 at https://sqlite.org/news.html.', ['https://sqlite.org/news.html'], ['2018-08-15']).length === 0);
+  test('schema validation finds a missing field and a bad enum', () => {
+    const errs = P.validateSchema({ matches: [{ feature: 0, sentence_id: 1, quote: 'q', verdict: 'maybe' }] }, P.AI_TASKS.match.schema);
+    return errs.some((e) => e.includes('reason')) && errs.some((e) => e.includes('verdict'));
+  });
+  test('Gemini response parsing reads text and grounding sources, skipping thoughts', () => {
+    const r = P.parseGeminiResponse({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'hidden', thought: true }, { text: '{"a":1}' }] },
+      groundingMetadata: { groundingChunks: [{ web: { uri: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/x', title: 'sqlite.org' } }], webSearchQueries: ['q'] } }] });
+    return r.text === '{"a":1}' && r.grounding.length === 1 && r.grounding[0].title === 'sqlite.org';
+  });
+  test('a safety stop is reported as an error', () => { try { P.parseGeminiResponse({ candidates: [{ finishReason: 'SAFETY', content: { parts: [] } }] }); return false; } catch (e) { return e.kind === 'ai-blocked'; } });
+
+  group('Network layer (simulated, no real requests)');
+  const fakeRes = (status, body, headers) => ({ status, ok: status >= 200 && status < 300, url: '', headers: new Headers(headers || {}), text: async () => body });
+  await atest('one retry after a 429, then success', async () => {
+    let calls = 0;
+    const res = await P.fetchWithRetry('https://x.example', {}, { backoffMs: 10, fetchImpl: async () => (++calls === 1 ? fakeRes(429, '') : fakeRes(200, 'ok')) });
+    return calls === 2 && res.status === 200;
+  });
+  await atest('a second 429 is returned, not retried forever', async () => {
+    let calls = 0;
+    const res = await P.fetchWithRetry('https://x.example', {}, { backoffMs: 10, fetchImpl: async () => { calls++; return fakeRes(429, ''); } });
+    return calls === 2 && res.status === 429;
+  });
+  await atest('a timeout becomes a clear error', async () => {
+    try {
+      await P.fetchWithRetry('https://x.example', {}, { timeoutMs: 50, fetchImpl: (u, init) => new Promise((_, rej) => init.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })))) });
+      return false;
+    } catch (e) { return e.kind === 'timeout'; }
+  });
+  await atest('demo mode answers from the cache and reports a miss clearly', async () => {
+    const gz = await P.gzipToBase64('{"hello":"world"}');
+    const net = P.createNet({ getMode: () => 'demo', cache: { 'https://api.example/a': { status: 200, gz, capturedAt: '2026-10-28T00:00:00Z' } } });
+    const r = await net.get('https://api.example/a');
+    let missKind = '';
+    try { await net.get('https://api.example/b'); } catch (e) { missKind = e.kind; }
+    return r.json().hello === 'world' && r.cached && missKind === 'demo-miss';
+  });
+  await atest('live mode without a proxy refuses web.archive.org before sending anything', async () => {
+    let sent = 0;
+    const net = P.createNet({ getMode: () => 'live', getProxy: () => '', fetchImpl: async () => { sent++; return fakeRes(200, ''); } });
+    try { await net.get('https://web.archive.org/cdx/search/cdx?url=a'); return false; } catch (e) { return e.kind === 'needs-proxy' && sent === 0; }
+  });
+  await atest('the proxy prefix is used for web.archive.org and the key is never logged', async () => {
+    const seen = [], logged = [];
+    const net = P.createNet({ getMode: () => 'live', getProxy: () => 'https://proxy.example/?url=', onLog: (e) => logged.push(e.url), fetchImpl: async (u) => { seen.push(u); return fakeRes(200, '[]'); } });
+    await net.get('https://web.archive.org/cdx/search/cdx?url=a');
+    await net.get('https://www.googleapis.com/youtube/v3/videos?id=x&key=SECRET', { cacheUrl: 'https://www.googleapis.com/youtube/v3/videos?id=x' });
+    return seen[0].startsWith('https://proxy.example/?url=https%3A%2F%2Fweb.archive.org') && !logged.join(' ').includes('SECRET');
+  });
+  await atest('without the CDX index, captures are sampled through the availability API', async () => {
+    const net = P.createNet({ getMode: () => 'live', getProxy: () => '', fetchImpl: async (u) => fakeRes(200, JSON.stringify({ archived_snapshots: { closest: { available: true, status: '200', timestamp: '20180101000000', url: 'http://web.archive.org/web/20180101000000/https://e.example/' } } })) });
+    const a = await P.findSnapshots(net, 'https://e.example/', { cutoff: '2019-01-01', countOnCutoff: false });
+    return a.method === 'availability' && a.captures.length === 1 && a.captures[0].before;
+  });
+  await atest('an invalid AI answer is retried once, then fails cleanly with the raw text', async () => {
+    let calls = 0;
+    const body = JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'not json at all' }] } }] });
+    const net = P.createNet({ getMode: () => 'live', fetchImpl: async () => { calls++; return fakeRes(200, body); } });
+    try { await P.geminiJson(net, { ...S, geminiKey: 'k' }, { taskKey: 'queries', user: 'x' }); return false; }
+    catch (e) { return e.kind === 'ai-invalid' && calls === 2 && e.raw === 'not json at all'; }
+  });
+  await atest('an invalid key gives a plain message', async () => {
+    const net = P.createNet({ getMode: () => 'live', fetchImpl: async () => fakeRes(400, JSON.stringify({ error: { message: 'API key not valid. Please pass a valid API key.' } })) });
+    try { await P.geminiGenerate(net, { ...S, geminiKey: 'bad' }, { system: 's', user: 'u' }); return false; }
+    catch (e) { return e.message === 'The Gemini API key is not valid.'; }
+  });
+  await atest('the Gemini key goes in a header, never in the URL', async () => {
+    let url = '', key = '';
+    const ok = JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'hi' }] } }] });
+    const net = P.createNet({ getMode: () => 'live', fetchImpl: async (u, init) => { url = u; key = init.headers['x-goog-api-key']; return fakeRes(200, ok); } });
+    await P.geminiGenerate(net, { ...S, geminiKey: 'SECRET' }, { system: 's', user: 'u' });
+    return !url.includes('SECRET') && key === 'SECRET';
+  });
+  await atest('an AI-proposed URL goes through the archive check, not straight into the evidence', async () => {
+    const net = P.createNet({ getMode: () => 'live', getProxy: () => '', fetchImpl: async () => fakeRes(200, JSON.stringify({ archived_snapshots: {} })) });
+    const res = await P.verifyCandidates(['https://invented.example/post'], { cutoff: '2019-01-01', features: ['f'] }, {}, { net, settings: S });
+    return res.length === 1 && res[0].verified === false && res[0].captures.length === 0;
+  });
+  await atest('gzip round trip used by the demo cache', async () => (await P.base64ToText(await P.gzipToBase64('ünïcode ✓'))) === 'ünïcode ✓');
+
+  summary.textContent = `${pass} passed, ${fail} failed.`;
+  summary.style.color = fail ? '#b42318' : '#1e7a3c';
+  document.title = `${fail ? 'FAIL' : 'PASS'} ${pass}/${pass + fail}`;
+})();
+</script>
+</body>
+</html>
