@@ -243,6 +243,7 @@ td .sub { display: block; font-size: 12.5px; color: var(--ink-2); margin-top: 2p
 .timeline-inner { position: relative; min-width: 640px; }
 .timeline svg { display: block; width: 100%; height: auto; }
 .timeline .lane-label { font-size: 12px; fill: var(--ink-2); }
+.timeline svg { overflow: visible; }
 .timeline .lane-line { stroke: var(--rule); }
 .timeline .tick text { font-size: 11px; fill: var(--ink-3); font-variant-numeric: tabular-nums; }
 .timeline .tick line { stroke: var(--rule); }
@@ -337,7 +338,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
 <div id="app"><p style="padding:24px;color:#4b5666">Loading Prior-Art Date Verifier…</p></div>
 
 <script type="text/x-template" id="timeline-template">
-  <div class="timeline">
+  <div class="timeline" v-if="model">
     <div class="timeline-wrap">
       <div class="timeline-inner" :style="{ minWidth: model.compact ? '520px' : '680px' }">
         <svg :viewBox="'0 0 ' + model.W + ' ' + model.H" role="group" :aria-label="'Timeline of dated evidence around the cut-off ' + cutoff">
@@ -348,10 +349,10 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
           </g>
           <g v-for="lane in model.lanes" :key="lane.key">
             <line class="lane-line" :x1="model.left" :x2="model.right" :y1="lane.y" :y2="lane.y"></line>
-            <text v-if="!model.compact" class="lane-label" x="0" :y="lane.y + 4">{{ lane.label }}</text>
+            <text v-if="model.left > 20" class="lane-label" x="0" :y="lane.y + 4">{{ lane.label }}</text>
           </g>
           <line class="cutoff-line" :x1="model.cutX" :x2="model.cutX" :y1="model.top - 16" :y2="model.bottom"></line>
-          <text class="cutoff-label" :x="model.cutX + 6" :y="model.top - 8">Cut-off {{ cutoff }}</text>
+          <text class="cutoff-label" :x="model.cutX + (model.cutX + 140 > model.W ? -6 : 6)" :text-anchor="model.cutX + 140 > model.W ? 'end' : 'start'" :y="model.top - 8">Cut-off {{ cutoff }}</text>
           <g v-for="m in model.marks" :key="m.id" class="mark" :class="[m.status, { after: m.after, selected: m.id === selected }]"
              :tabindex="m.status === 'unchecked' && m.s.kind === 'wayback' ? -1 : 0" role="button" :aria-label="m.label"
              @mouseenter="tip(m)" @mouseleave="untip" @focus="tip(m)" @blur="untip"
@@ -401,6 +402,10 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
   <div v-if="mode === 'demo'" class="banner demo">
     <strong>Demo mode.</strong>
     <span>Every request is answered from real responses cached on {{ demoCaptured || 'the build date' }}, so the demo works offline. Switch to Live to query the services now.</span>
+  </div>
+  <div v-else-if="isLocalFile && !settings.proxyPrefix" class="banner warn">
+    <strong>Opened as a local file.</strong>
+    <span>The Internet Archive refuses requests from local files, so archive dates will be missing in live mode. Open the published site, or serve this folder (python -m http.server), or add a proxy in Settings. GitHub, Software Heritage, Hacker News, YouTube and Gemini still work.</span>
   </div>
   <div v-else-if="!settings.proxyPrefix" class="banner warn">
     <strong>Live mode without a proxy.</strong>
@@ -557,7 +562,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
               <span class="spacer"></span>
               <button type="button" class="quiet" @click="ui.tab = 'timeline'">Open the full timeline</button>
             </div>
-            <timeline-chart :model="miniTimeline" :cutoff="selected.cutoff" :selected="ui.selectedSource" :show-legend="false" @open="openMark"></timeline-chart>
+            <timeline-chart :result="result" :cutoff="selected.cutoff" :zoom="ui.zoom" :compact="true" :version="version" :selected="ui.selectedSource" :show-legend="false" @open="openMark"></timeline-chart>
           </div>
 
           <div class="grid-2">
@@ -663,7 +668,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
                 <button type="button" :aria-pressed="ui.zoom === 'all'" @click="ui.zoom = 'all'">All</button>
               </div>
             </div>
-            <timeline-chart v-if="timeline && timeline.marks.length" :model="timeline" :cutoff="selected.cutoff" :selected="ui.selectedSource" :show-legend="true" @open="openMark"></timeline-chart>
+            <timeline-chart v-if="timeline && timeline.marks.length" :result="result" :cutoff="selected.cutoff" :zoom="ui.zoom" :compact="false" :version="version" :selected="ui.selectedSource" :show-legend="true" @open="openMark"></timeline-chart>
             <p v-else class="muted">{{ result.running ? 'The timeline fills in as dates arrive.' : 'No dated evidence in this range.' }}</p>
             <p class="small muted" style="margin-top:10px">Hover over or focus a mark to see its date and source; select it to open the evidence row. The shaded area is after the cut-off.</p>
           </div>
@@ -854,7 +859,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
             </template>
 
             <h2>4. Timeline</h2>
-            <timeline-chart v-if="reportTimeline && reportTimeline.marks.length" :model="reportTimeline" :cutoff="selected.cutoff" :selected="null" :show-legend="true" @open="() => {}"></timeline-chart>
+            <timeline-chart v-if="reportTimeline && reportTimeline.marks.length" :result="result" :cutoff="selected.cutoff" zoom="5y" :compact="false" :version="version" :selected="null" :show-legend="true" @open="() => {}"></timeline-chart>
 
             <h2>5. Evidence table</h2>
             <div class="table-wrap">
@@ -1023,7 +1028,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
 (function (global) {
   'use strict';
 
-  const TOOL_VERSION = '1.0.0';
+  const TOOL_VERSION = '1.0.1';
   const DAY_MS = 86400000;
 
   /* Hosts that send no CORS headers. Verified on 2026-10-28 by calling each
@@ -1032,6 +1037,11 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
      availability API, GitHub, Software Heritage, Hacker News (Algolia),
      YouTube Data API and Gemini answered normally. */
   const CORS_BLOCKED_HOSTS = ['web.archive.org'];
+  /* Opened as a local file, the page has the origin "null". Checked on 2026-10-28:
+     archive.org's availability API refuses that origin; GitHub, Software Heritage,
+     Hacker News, YouTube and Gemini accept it. */
+  const IS_LOCAL_FILE = typeof location !== 'undefined' && location.protocol === 'file:';
+  function isBlockedHost(host) { return CORS_BLOCKED_HOSTS.includes(host) || (IS_LOCAL_FILE && host === 'archive.org'); }
   const ARCHIVE_HOSTS = ['web.archive.org', 'archive.org'];
 
   const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2';
@@ -1573,7 +1583,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
     function canReach(host) {
       const mode = opt.getMode();
       if (mode !== 'live') return true;
-      return !CORS_BLOCKED_HOSTS.includes(host) || !!String(opt.getProxy() || '').trim();
+      return !isBlockedHost(host) || !!String(opt.getProxy() || '').trim();
     }
 
     /* cacheUrl is the URL without secrets; it is the key for the demo cache and
@@ -1596,9 +1606,11 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
           return wrapResponse(c.status, text, c.contentType, { cached: true, capturedAt: c.capturedAt, finalUrl: c.finalUrl || null });
         }
         let target = url, via = 'live';
-        if (mode === 'live' && (forceProxy || CORS_BLOCKED_HOSTS.includes(host))) {
+        if (mode === 'live' && (forceProxy || isBlockedHost(host))) {
           const p = String(opt.getProxy() || '').trim();
-          if (!p) throw new NetError('needs-proxy', `${host} does not allow requests from web pages. Add a CORS proxy in Settings, or use demo mode.`);
+          if (!p) throw new NetError('needs-proxy', IS_LOCAL_FILE && host === 'archive.org'
+            ? 'archive.org refuses requests from a page opened as a local file. Open the published site, serve the folder over http, or add a proxy in Settings.'
+            : `${host} does not allow requests from web pages. Add a CORS proxy in Settings, or use demo mode.`);
           target = p + encodeURIComponent(url);
           via = 'proxy';
         }
@@ -1692,32 +1704,67 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
       const afterRows = parseCdx(after.text()) || [];
       const seen = new Set(out.captures.map((x) => x.ts));
       for (const r of afterRows) if (!seen.has(r.timestamp)) out.captures.push(toCapture(r, c.cutoff, c.countOnCutoff, 'cdx'));
-    } else {
-      // Fallback: the availability API answers from web pages but gives only the
-      // closest capture to a date, so a handful of dates are sampled.
+    } else if (!net.canReach('archive.org')) {
       out.method = 'availability';
-      out.notes.push('The full capture list (CDX) cannot be reached from this browser, so captures were sampled with the availability API. Add a proxy in Settings for the complete list.');
+      out.status = 'blocked';
+      out.reason = 'Opened as a local file: the Internet Archive refuses requests from local files, so no archive dates could be read. Open the published site, serve the folder over http, or add the proxy in Settings.';
+      out.notes.push(out.reason);
+    } else {
+      // Fallback: the availability API answers from web pages but gives only the closest
+      // capture to a date, so a handful of dates are sampled. It is slow and sometimes
+      // answers "nothing" for a page it holds, so empty answers are asked once more.
+      out.method = 'availability';
       const base = parseYMD(c.cutoff);
       const offsets = [0, -1, -3, -6, -12, -24, -48, -96, 1];
       const seen = new Set();
+      const tally = { asked: 0, empty: 0, errors: {} };
+      const lookup = async (v, m) => {
+        tally.asked++;
+        const stamp = waybackDay(addMonthsUTC(base, m));
+        try {
+          const r = await net.get(`https://archive.org/wayback/available?url=${encodeURIComponent(v)}&timestamp=${stamp}`, { label: 'Wayback availability', timeoutMs: 20000 });
+          if (!r.ok) { const k = `HTTP ${r.status}`; tally.errors[k] = (tally.errors[k] || 0) + 1; return { m, snap: null, failed: true }; }
+          const snaps = r.json().archived_snapshots || {};
+          const snap = snaps.closest && snaps.closest.available ? snaps.closest : null;
+          if (!snap) tally.empty++;
+          return { m, snap };
+        } catch (e) {
+          const k = e.kind === 'timeout' ? 'timeout' : e.kind === 'parse' ? 'unreadable answer' : 'network error';
+          tally.errors[k] = (tally.errors[k] || 0) + 1;
+          return { m, snap: null, failed: true };
+        }
+      };
+      const add = (s) => {
+        if (!s || seen.has(s.timestamp)) return;
+        seen.add(s.timestamp);
+        const original = String(s.url).replace(/^https?:\/\/web\.archive\.org\/web\/\d+\//, '');
+        out.captures.push(toCapture({ timestamp: s.timestamp, original, statuscode: s.status }, c.cutoff, c.countOnCutoff, 'availability'));
+      };
       for (const v of urlVariants(url).slice(0, 2)) {
-        const results = await Promise.all(offsets.map(async (m) => {
-          const stamp = waybackDay(addMonthsUTC(base, m));
-          try {
-            const r = await net.get(`https://archive.org/wayback/available?url=${encodeURIComponent(v)}&timestamp=${stamp}`, { label: 'Wayback availability' });
-            const snap = r.json().archived_snapshots && r.json().archived_snapshots.closest;
-            return snap && snap.available ? snap : null;
-          } catch (e) { return null; }
-        }));
-        for (const s of results.filter(Boolean)) {
-          if (seen.has(s.timestamp)) continue;
-          seen.add(s.timestamp);
-          const original = String(s.url).replace(/^https?:\/\/web\.archive\.org\/web\/\d+\//, '');
-          out.captures.push(toCapture({ timestamp: s.timestamp, original, statuscode: s.status }, c.cutoff, c.countOnCutoff, 'availability'));
+        const results = await Promise.all(offsets.map((m) => lookup(v, m)));
+        results.forEach((x) => add(x.snap));
+        // Rate limited: stop at once rather than adding to the load.
+        if (tally.errors['HTTP 429']) break;
+        if (!out.captures.length) {
+          const retry = results.filter((x) => !x.snap && !x.failed).slice(0, 4);
+          if (retry.length) { await sleep(1200); (await Promise.all(retry.map((x) => lookup(v, x.m)))).forEach((x) => add(x.snap)); }
         }
         if (out.captures.length) { out.variant = v; break; }
       }
-      if (!out.captures.length) { out.status = 'empty'; out.notes.push('No capture was returned for the sampled dates.'); }
+      const errs = Object.entries(tally.errors).map(([k, n]) => `${k} ×${n}`).join(', ');
+      if (out.captures.length) {
+        out.notes.push('Captures were sampled through the availability API, because the full capture list (CDX) cannot be read from a web page. Add the proxy in Settings for the complete list.');
+      } else if (errs) {
+        out.status = 'failed';
+        out.reason = tally.errors['HTTP 429']
+          ? `The Internet Archive is limiting requests from this connection (HTTP 429 on ${tally.errors['HTTP 429']} of ${tally.asked} lookups). Wait a few minutes before running the check again.`
+          : `The Internet Archive's availability service did not answer ${Object.values(tally.errors).reduce((a, b) => a + b, 0)} of ${tally.asked} lookups (${errs}). Wait a minute and run the check again, or add the proxy in Settings.`;
+        out.notes.push(out.reason);
+      } else {
+        out.status = 'empty';
+        out.reason = `The Internet Archive's availability service returned no capture for ${tally.asked} sampled dates. The service is sometimes unreliable, so run the check again, or add the proxy in Settings for the full list.`;
+        out.notes.push(out.reason);
+      }
     }
     out.captures.sort((a, b) => a.ts.localeCompare(b.ts));
     return out;
@@ -2069,8 +2116,9 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
       const a = await findSnapshots(env.net, archiveUrl, c);
       result.reference = a;
       const pre = a.captures.filter((x) => x.before).length;
-      setMod('A', a.status === 'done' ? 'done' : 'failed', a.status === 'done'
-        ? `${pre} capture${pre === 1 ? '' : 's'} before the cut-off${a.method === 'availability' ? ' (sampled)' : ''}, ${a.captures.length - pre} after.` : a.notes[0]);
+      setMod('A', a.status, a.status === 'done'
+        ? `${pre} capture${pre === 1 ? '' : 's'} before the cut-off, ${a.captures.length - pre} after.${a.method === 'availability' ? ' Sampled through the availability API; add the proxy in Settings for the full list.' : ''}${a.variant && a.variant !== archiveUrl ? ` Matched ${a.variant}.` : ''}`
+        : (a.reason || a.notes[a.notes.length - 1] || 'No capture found.'));
     } catch (e) { setMod('A', 'failed', e.message); result.reference.error = e; }
     env.on && env.on.update && env.on.update(result);
 
@@ -2414,7 +2462,7 @@ pre { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; backgrou
 
   global.PADV = {
     aiUserText, sentencesForAi,
-    TOOL_VERSION, DAY_MS, CORS_BLOCKED_HOSTS, DEFAULT_SETTINGS, GRADE_ORDER, GRADE_TEXT, AI_SYSTEM_INSTRUCTIONS, AI_TASKS,
+    TOOL_VERSION, DAY_MS, CORS_BLOCKED_HOSTS, IS_LOCAL_FILE, isBlockedHost, DEFAULT_SETTINGS, GRADE_ORDER, GRADE_TEXT, AI_SYSTEM_INSTRUCTIONS, AI_TASKS,
     parseWaybackTimestamp, parseYMD, cutoffLimitMs, isBeforeCutoff, isNearCutoff, isoDate, formatUTC, waybackDay, addMonthsUTC,
     normaliseInputUrl, hostOf, youtubeId, githubRepo, detectType, urlVariants, documentKey, sameDocument,
     normaliseWhitespace, normaliseForQuote, stem, tokenize, lexicalScore, keywordPhrase, splitSentences, extractTextFromHtml,
@@ -2539,7 +2587,7 @@ if (!window.Vue) {
     if (st.some((x) => x === 'present' || x === 'possible')) return 'possible';
     return 'absent';
   }
-  function timelineModel(result, cutoff, zoom, compact) {
+  function timelineModel(result, cutoff, zoom, compact, width) {
     if (!result || !result.sources) return null;
     const cut = P.parseYMD(cutoff);
     if (!cut) return null;
@@ -2556,7 +2604,9 @@ if (!window.Vue) {
     }
     const span = Math.max(maxMs - minMs, 60 * P.DAY_MS);
     minMs -= span * 0.03; maxMs += span * 0.06;
-    const W = 1000, left = compact ? 14 : 200, right = W - 18;
+    // Drawn at the real pixel width, so text and marks keep the same size on any screen.
+    const W = Math.max(Math.round(width || 1000), compact ? 520 : 680);
+    const left = compact ? (W >= 760 ? 170 : 14) : 200, right = W - 18;
     const lanes = LANES.filter((l) => sources.some(l.test)).map((l) => ({ ...l }));
     const laneH = compact ? 28 : 42, top = 30;
     const bottom = top + Math.max(lanes.length, 1) * laneH;
@@ -2589,12 +2639,21 @@ if (!window.Vue) {
     return { W, H, left, right, top, bottom, lanes, marks, compact, cutX: x(cutMs), ticks: ticks.filter((t) => t.x >= left && t.x <= right) };
   }
 
-  /* ---------- Timeline component ---------- */
+  /* ---------- Timeline component: measures its own width ---------- */
   const TimelineChart = {
     template: '#timeline-template',
-    props: { model: Object, cutoff: String, selected: String, showLegend: Boolean },
+    props: { result: Object, cutoff: String, zoom: String, compact: Boolean, version: Number, selected: String, showLegend: Boolean },
     emits: ['open'],
-    data: () => ({ tooltip: null }),
+    data: () => ({ tooltip: null, width: 1000 }),
+    computed: {
+      model() { this.version; return timelineModel(this.result, this.cutoff, this.zoom, this.compact, this.width); }
+    },
+    mounted() {
+      const measure = () => { const w = this.$el && this.$el.clientWidth; if (w) this.width = w; };
+      measure();
+      if (window.ResizeObserver) { this.ro = new ResizeObserver(measure); this.ro.observe(this.$el); }
+    },
+    beforeUnmount() { if (this.ro) this.ro.disconnect(); },
     methods: {
       tip(m) {
         this.tooltip = { left: `${(m.x / this.model.W) * 100}%`, top: `${(m.y / this.model.H) * 100}%`,
@@ -3071,7 +3130,7 @@ if (!window.Vue) {
 
       return {
         appVersion, mode, theme, settings, cases, selectedId, logs, ui, aiPreview, version, P,
-        MODULES, TABS, CLASS_TEXT, LIMITATIONS, CONFIDENTIAL_NOTICE, storeOk: store.ok, demoCaptured, reportGeneratedAt,
+        MODULES, TABS, CLASS_TEXT, LIMITATIONS, CONFIDENTIAL_NOTICE, storeOk: store.ok, isLocalFile: P.IS_LOCAL_FILE, demoCaptured, reportGeneratedAt,
         selected, result, grade, features, detectedType, evidenceRows, reportRows, uncheckedCount, checkedCaptures, uncheckedCaptures,
         firstPresent, timeline, miniTimeline, reportTimeline, overrideCount, nearCutoff, runningMessage, countedSummary, excludedSummary,
         nextActions, reportExcerpts,

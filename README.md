@@ -86,19 +86,20 @@ The switch is in the top bar.
 
 ## 6. CORS findings
 
-Checked on 2026-10-28 by calling each endpoint with `fetch()` from a page at `https://example.com` in a desktop Chromium browser.
+Checked on 2026-10-28 by calling each endpoint with `fetch()` in a desktop Chromium browser, from a normal web page (`https://example.com`, the same situation as GitHub Pages) and from a page with origin `null` (the situation when `index.html` is opened straight from disk).
 
-| Endpoint | Readable from a web page? | How the tool uses it |
-|---|---|---|
-| Wayback CDX index `web.archive.org/cdx/search/cdx` | **No** (no CORS headers) | Through the proxy; otherwise the availability API is used |
-| Wayback timemap `web.archive.org/web/timemap/…` | **No** | Not used |
-| Archived pages `web.archive.org/web/<ts>id_/<url>` | **No** | Through the proxy; otherwise Module B reports that it needs the proxy |
-| Wayback availability `archive.org/wayback/available` | Yes | Fallback sampling of captures |
-| Software Heritage API `archive.softwareheritage.org/api/1/…` | Yes | Direct |
-| GitHub REST API `api.github.com` | Yes (60 requests per hour without sign-in) | Direct |
-| YouTube Data API `www.googleapis.com/youtube/v3` | Yes (needs a key) | Direct |
-| Hacker News search `hn.algolia.com/api/v1/search` | Yes | Direct |
-| Gemini `generativelanguage.googleapis.com` | Yes, including the preflight for the `x-goog-api-key` header | Direct (not added to the proxy) |
+| Endpoint | From a web page | From a local file | How the tool uses it |
+|---|---|---|---|
+| Wayback CDX index `web.archive.org/cdx/search/cdx` | **No** | **No** | Through the proxy; otherwise the availability API is used |
+| Archived pages `web.archive.org/web/<ts>id_/<url>` | **No** | **No** | Through the proxy; otherwise Module B reports that it needs the proxy |
+| Wayback availability `archive.org/wayback/available` | Yes, but slow (up to about 5 s) and sometimes answers "nothing" for an archived page | **No** | Fallback sampling of captures; empty answers are asked once more |
+| Software Heritage API `archive.softwareheritage.org/api/1/…` | Yes | Yes | Direct |
+| GitHub REST API `api.github.com` | Yes (60 requests per hour without sign-in) | Yes | Direct |
+| YouTube Data API `www.googleapis.com/youtube/v3` | Yes (needs a key) | Yes, unless the key is restricted to your site's address | Direct |
+| Hacker News search `hn.algolia.com/api/v1/search` | Yes | Yes | Direct |
+| Gemini `generativelanguage.googleapis.com` | Yes, including the preflight for the `x-goog-api-key` header | Yes | Direct (not added to the proxy) |
+
+So: use the published GitHub Pages address (or serve the folder with `python -m http.server`) for live checks. Opened from disk, the tool says so in a banner and skips the Internet Archive instead of failing silently.
 
 ## 7. Grading rules
 
@@ -204,7 +205,8 @@ Inside `index.html`, the `<script id="padv-core">` block holds all evidence logi
 ## 14. Known issues
 
 - Without the proxy, live mode can only sample captures and cannot read archived pages. Deploy the Worker before a live demonstration.
-- The Internet Archive rate-limits heavy use (HTTP 429). The tool retries once, limits itself to three parallel archive requests, and otherwise asks you to wait.
+- Opened straight from disk, the page cannot reach the Internet Archive at all (its availability service refuses local files). Use the published site for live checks; demo mode works either way.
+- The Internet Archive rate-limits heavy use (HTTP 429). The tool retries once, limits itself to three parallel archive requests, stops its sampling at the first rate-limit answer, and asks you to wait.
 - GitHub allows 60 unsigned API requests per hour; a GitHub case uses about ten.
 - Search grounding sources are Google redirect links; without the proxy they are listed but cannot be verified.
 - The semantic model (about 23 MB) is downloaded from the Hugging Face hub the first time it is used. In a test on 2026-10-28 it loaded in about 13 seconds; a clear match scored 0.59, an unrelated "Windows" sentence 0.19. Semantic scores are therefore set to count as present only from 0.60.
